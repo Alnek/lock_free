@@ -36,16 +36,12 @@ void produce(testqueue* gueue, TLS* tls)
 
     while (prodCnt.load() < ITEMS)
     {
+        uint32_t prev = prodCnt.fetch_add(1);
+        if (prev > ITEMS) break;
+
         const int val = rand();
-        bool res = gueue->Enqueue(val);
-
-        if (res)
-        {
-            tls->buffer.push_back(val);
-
-            uint32_t cur = prodCnt.load();
-            while (false == prodCnt.compare_exchange_strong(cur, cur + 1));
-        }
+        while (false == gueue->Enqueue(val));
+        tls->buffer.push_back(val);
     }
 }
 
@@ -64,8 +60,7 @@ void consume(testqueue* gueue, TLS* tls)
         {
             tls->buffer.push_back(val);
 
-            uint32_t cur = consCnt.load();
-            while (false == consCnt.compare_exchange_strong(cur, cur + 1));
+            consCnt.fetch_add(1);
         }
     }
 }
@@ -107,12 +102,12 @@ void test_overflow()
     assert(first == read && "unexpected value");
 }
 
-void test_multithreaded()
+bool test_multithreaded()
 {
     testqueue queue(64);
 
-    const int consumersNum = 1 + rand() % 8;
-    const int producersNum = 1 + rand() % 8;
+    const int consumersNum = 8;// 1 + rand() % 4;
+    const int producersNum = 8;// 1 + rand() % 4;
     std::cout << "consumers: " << consumersNum << "\n";
     std::cout << "producers: " << producersNum << "\n";
 
@@ -159,9 +154,12 @@ void test_multithreaded()
     // order is undefined - compare sorted - looks like the only way to compare consistency at least of produced/consumed numbers 
     std::sort(enqueued.begin(), enqueued.end());
     std::sort(dequeued.begin(), dequeued.end());
-    assert(enqueued == dequeued);
+    const bool result = (enqueued == dequeued);
+    assert(result && "enqueued != dequeued ???");
     std::cout << "enq=" << enqueued.size() << "\n";
     std::cout << "deq=" << enqueued.size() << "\n";
+    std::cout << "\n";
+    return result;
 }
 
 int main()
@@ -169,11 +167,23 @@ int main()
     // randomize
     srand(static_cast<uint32_t>(time(nullptr)));
 
-    // tests
-    test_one_by_one();
-    test_read_empty();
-    test_overflow();
-    test_multithreaded();
+    while(true)
+    {
+        startFlag.store(false);
+        doneFlag.store(false);
+        prodCnt.store(0);
+        consCnt.store(0);
+
+        // tests
+        test_one_by_one();
+        test_read_empty();
+        test_overflow();
+        if (false == test_multithreaded())
+        {
+            std::cout << "failed!\n";
+            return -1;
+        }
+    }
 
     std::cout << "done\n";
 

@@ -6,27 +6,28 @@ bool cqueue_lf::Enqueue(int val)
 
     for (;;)
     {
-        uint32_t end = mEnd.load();
-        uint32_t begin = mBegin.load();
+        Whole state = mState.whole.load();
+        uint32_t begin = state.begin;
+        uint32_t end = state.end;
 
-        /*
-        static const uint32_t reduce = 1000 * mCapacity;
-        if (begin > reduce)
+        static uint32_t REDUCE = mCapacity * 100000; // this value must be big because of A-B-A issue;
+        if (begin >= REDUCE)
         {
-            while (false == mEnd.compare_exchange_strong(end, end - reduce));
-            while (false == mBegin.compare_exchange_strong(begin, begin - reduce));
+            Whole newState = state;
+            newState.begin -= REDUCE;
+            newState.end -= REDUCE;
+            assert(cur(newState.begin) == cur(state.begin));
+            assert(cur(newState.end) == cur(state.end));
+            mState.whole.compare_exchange_strong(state, newState);
             continue;
-        }*/
+        }
 
         if (end - begin >= mCapacity)
             return false; // no capacity
 
         mBuf[cur(end)] = val;
-
-        if (true == mEnd.compare_exchange_strong(end, next(end)))
-        {
-            return true;
-        }
+        mState.atomics.end.fetch_add(1);
+        return true;
     }
 }
 
@@ -34,15 +35,18 @@ bool cqueue_lf::Dequeue(int& val)
 {
     for (;;)
     {
-        uint32_t begin = mBegin.load();
-        uint32_t end = mEnd.load();
+        Whole state = mState.whole.load();
+        uint32_t begin = state.begin;
+        uint32_t end = state.end;
 
         if (begin == end)
+        {
             return false; // empty
+        }
 
         val = mBuf[cur(begin)];
 
-        if (true == mBegin.compare_exchange_strong(begin, next(begin)))
+        if (true == mState.atomics.begin.compare_exchange_strong(begin, next(begin)))
         {
             return true;
         }
